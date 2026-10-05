@@ -79,7 +79,7 @@ label{display:block;font-size:13.5px;font-weight:600;color:var(--ink2);margin:10
 .strip{display:flex;gap:6px;flex-wrap:wrap}
 .pill{border-radius:6px;padding:4px 9px;font-size:12.5px;font-weight:600;background:var(--mute-bg);color:var(--mute);border:1px solid transparent}
 .pill.ok{background:var(--ok-bg);color:var(--ok)} .pill.warn{background:var(--warn-bg);color:var(--warn)}
-.pill.bad{background:var(--bad-bg);color:var(--bad)} .pill.now{background:#fff;color:var(--blue);border-color:var(--blue)}
+.pill.bad{background:var(--bad-bg);color:var(--bad)} .pill.inc{background:var(--cable-bg);color:var(--cable)} .pill.now{background:#fff;color:var(--blue);border-color:var(--blue)}
 .legend{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 10px;font-size:12.5px}
 .empty{text-align:center;color:var(--ink2);padding:26px 10px}
 table{width:100%;border-collapse:collapse;font-size:14.5px}
@@ -217,11 +217,14 @@ function estRev(id,y,p){
 function estCobro(id,y){
   const e=S.eco[id]||{}, c=(e.cobros||{})[y]||{};
   if(c.cobrado) return {c:"ok",t:"cobrado",done:true};
+  if(esIncluido(c)) return {c:"inc",t:"incluido 1er año",done:true,inc:true};
   if(e.precio==null||e.precio==="") return {c:"",t:"sin precio"};
   if(y>HOY.getFullYear()) return {c:"",t:"pendiente"};
   if(y<HOY.getFullYear()||HOY.getMonth()>0) return {c:"bad",t:"sin cobrar"};
   return {c:"now",t:"toca cobrar"};
 }
+/* Primer año tras la instalación: el mantenimiento va incluido y no se cobra */
+function esIncluido(c){ return !!c && (c.incluido===true || /^1\s*a[ñn]o$/i.test((c.nota||"").trim())); }
 function strip(id,y){
   let h='<div class="strip">';
   if(isAdmin()){ const c=estCobro(id,y); h+=`<span class="pill ${c.c}">Cobro ${y}: ${c.t}</span>`; }
@@ -262,14 +265,16 @@ function vResumen(){
   else h+=`<p class="sub">Todas las revisiones de este periodo están hechas.</p>`;
   h+=`</div>`;
   if(isAdmin()){
-    const conP=L.filter(i=>S.eco[i.id]&&S.eco[i.id].precio!=null&&S.eco[i.id].precio!=="");
+    const conPrecio=L.filter(i=>S.eco[i.id]&&S.eco[i.id].precio!=null&&S.eco[i.id].precio!=="");
+    const nInc=L.filter(i=>estCobro(i.id,y).inc).length;
+    const conP=conPrecio.filter(i=>!estCobro(i.id,y).inc);
     const total=conP.reduce((s,i)=>s+Number(S.eco[i.id].precio),0);
     const cob=conP.filter(i=>estCobro(i.id,y).done), cobrado=cob.reduce((s,i)=>s+Number(S.eco[i.id].precio),0);
-    const sinCobrar=conP.filter(i=>!estCobro(i.id,y).done), sinPrecio=L.length-conP.length;
+    const sinCobrar=conP.filter(i=>!estCobro(i.id,y).done), sinPrecio=L.length-conPrecio.length;
     h+=`<div class="panel"><h3>Cobro anual ${y}</h3><div class="sub">Se factura una vez al año, en enero.</div>
       <div class="bar"><i style="width:${total?cobrado/total*100:0}%"></i></div>
       <div><span class="big">${eur(cobrado)}</span> cobrados de ${eur(total)}</div>
-      <p class="sub" style="margin:6px 0 0">${sinCobrar.length} sin cobrar (${eur(total-cobrado)})${sinPrecio?`, y ${sinPrecio} instalaciones sin precio puesto`:""}.</p>
+      <p class="sub" style="margin:6px 0 0">${sinCobrar.length} sin cobrar (${eur(total-cobrado)})${sinPrecio?`, y ${sinPrecio} instalaciones sin precio puesto`:""}.${nInc?` ${nInc} no se cobran este año por ser su primer año.`:""}</p>
       ${sinCobrar.length?`<ul class="list">`+sinCobrar.map(i=>`<li><div class="nm"><b>${esc(i.comunidad)}</b><span>${esc(i.admin||"")}</span></div><span>${eur(S.eco[i.id].precio)}</span><button class="btn sm ghost" data-act="cobrar" data-id="${i.id}" data-y="${y}">Marcar cobrado</button></li>`).join("")+`</ul>`:""}
     </div>`;
     const f={cam:L.filter(i=>!i.camaras).length, con:L.filter(i=>!i.conexion).length, cla:L.filter(i=>!(i.claves||"").trim()).length, pre:sinPrecio};
@@ -316,14 +321,15 @@ function vCobros(){
   const y=UI.year; let tot=0, cob=0;
   const rows=L.map(i=>{
     const e=S.eco[i.id]||{}, c=(e.cobros||{})[y]||{}, tiene=e.precio!=null&&e.precio!=="";
-    if(tiene){ tot+=Number(e.precio); if(c.cobrado) cob+=Number(e.precio); }
-    return `<tr><td><b>${esc(i.comunidad)}</b><div class="sub">${esc(i.admin||"")}${c.nota?` | Nota: ${esc(c.nota)}`:""}</div></td>
+    const st=estCobro(i.id,y);
+    if(tiene&&!st.inc){ tot+=Number(e.precio); if(c.cobrado) cob+=Number(e.precio); }
+    return `<tr><td><b>${esc(i.comunidad)}</b><div class="sub">${esc(i.admin||"")}${c.nota&&!/^1\s*a[ñn]o$/i.test(c.nota.trim())?` | Nota: ${esc(c.nota)}`:""}</div></td>
       <td class="num">${eur(e.precio)}</td>
-      <td>${c.cobrado?`<span class="pill ok">Cobrado ${esc(fFecha(c.fecha))}</span>`:`<span class="pill ${estCobro(i.id,y).c}">${estCobro(i.id,y).t}</span>`}</td>
-      <td class="num">${c.cobrado?`<button class="btn sm ghost" data-act="descobrar" data-id="${i.id}" data-y="${y}">Deshacer</button>`:`<button class="btn sm" data-act="cobrar" data-id="${i.id}" data-y="${y}">Marcar cobrado</button>`} <button class="btn sm ghost" data-act="notaCobro" data-id="${i.id}" data-y="${y}">Nota</button></td></tr>`;
+      <td>${c.cobrado?`<span class="pill ok">Cobrado ${esc(fFecha(c.fecha))}</span>`:`<span class="pill ${st.c}">${st.inc?"Incluido 1er año":st.t}</span>`}</td>
+      <td class="num">${c.cobrado?`<button class="btn sm ghost" data-act="descobrar" data-id="${i.id}" data-y="${y}">Deshacer</button>`:st.inc?`<button class="btn sm ghost" data-act="noIncluir" data-id="${i.id}" data-y="${y}">Quitar incluido</button>`:`<button class="btn sm" data-act="cobrar" data-id="${i.id}" data-y="${y}">Marcar cobrado</button> <button class="btn sm ghost" data-act="incluir" data-id="${i.id}" data-y="${y}">1er año incluido</button>`} <button class="btn sm ghost" data-act="notaCobro" data-id="${i.id}" data-y="${y}">Nota</button></td></tr>`;
   }).join("");
   return `<div class="row" style="margin-bottom:10px"><h2 style="margin:0;flex:1">Cobro anual</h2><select id="fYear" style="width:auto" aria-label="Año">${yearOpts()}</select></div>
-  <div class="panel"><div><span class="big">${eur(cob)}</span> cobrados de ${eur(tot)}</div><div class="bar"><i style="width:${tot?cob/tot*100:0}%"></i></div><div class="sub">Pendiente: ${eur(tot-cob)}. El cobro de cada año se hace en enero.</div></div>
+  <div class="panel"><div><span class="big">${eur(cob)}</span> cobrados de ${eur(tot)}</div><div class="bar"><i style="width:${tot?cob/tot*100:0}%"></i></div><div class="sub">Pendiente: ${eur(tot-cob)}. El cobro de cada año se hace en enero. El primer año tras la instalación va incluido y no cuenta en estos totales.</div></div>
   <div class="panel tw"><table><thead><tr><th>Comunidad</th><th class="num">Precio/año</th><th>Estado</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
@@ -362,7 +368,7 @@ function mVer(id){
   <ul class="list">${["verano","invierno"].map(p=>{const s=estRev(id,y,p), r=S.revs[revId(id,y,p)];return `<li><div class="nm"><b>${PER[p]} ${y}</b><span>${r&&r.fecha?esc(fFecha(r.fecha))+(r.tecnico?", "+esc(r.tecnico):""):(p==="verano"?"Cambio de hora de marzo":"Cambio de hora de octubre")}</span></div><span class="pill ${s.c}">${s.t}</span><button class="btn sm ${s.done?"ghost":""}" data-act="rev" data-id="${id}" data-y="${y}" data-p="${p}">${s.done?"Ver acta":"Revisar"}</button></li>`}).join("")}</ul>`;
   const otras=revs.filter(([k,r])=>r.anio!==y);
   if(otras.length) h+=`<h2>Otros años</h2><ul class="list">${otras.map(([k,r])=>`<li><div class="nm"><b>${PER[r.periodo]} ${r.anio}</b><span>${esc(fFecha(r.fecha))}</span></div><button class="btn sm ghost" data-act="rev" data-id="${id}" data-y="${r.anio}" data-p="${r.periodo}">Ver acta</button></li>`).join("")}</ul>`;
-  if(isAdmin()){ const c=estCobro(id,y); h+=`<h2>Cobro ${y}</h2><div class="row"><span class="pill ${c.c}">${c.t}</span>${c.done?`<button class="btn sm ghost" data-act="descobrar" data-id="${id}" data-y="${y}" data-back="1">Deshacer</button>`:`<button class="btn sm" data-act="cobrar" data-id="${id}" data-y="${y}" data-back="1">Marcar cobrado</button>`}</div>`; }
+  if(isAdmin()){ const c=estCobro(id,y); h+=`<h2>Cobro ${y}</h2><div class="row"><span class="pill ${c.c}">${c.t}</span>${c.inc?`<button class="btn sm ghost" data-act="noIncluir" data-id="${id}" data-y="${y}" data-back="1">Quitar incluido</button>`:c.done?`<button class="btn sm ghost" data-act="descobrar" data-id="${id}" data-y="${y}" data-back="1">Deshacer</button>`:`<button class="btn sm" data-act="cobrar" data-id="${id}" data-y="${y}" data-back="1">Marcar cobrado</button><button class="btn sm ghost" data-act="incluir" data-id="${id}" data-y="${y}" data-back="1">1er año incluido</button>`}</div>`; }
   h+=`<div class="actions">${isAdmin()?`<button class="btn" data-act="editar" data-id="${id}">Editar</button><span class="sp"></span><button class="btn danger" data-act="borrar" data-id="${id}">Dar de baja</button>`:""}</div>`;
   abrir(h);
 }
@@ -398,7 +404,8 @@ function mRev(id,y,p){
 /* ---------------- Acciones ---------------- */
 async function setCobro(id,y,patch){
   const e=JSON.parse(JSON.stringify(S.eco[id]||{precio:null,cuenta:"",cobros:{}})); e.cobros=e.cobros||{};
-  e.cobros[y]=Object.assign({cobrado:false,fecha:"",nota:""},e.cobros[y]||{},patch);
+  e.cobros[y]=Object.assign({cobrado:false,fecha:"",nota:"",incluido:false},e.cobros[y]||{},patch);
+  if(patch.cobrado) e.cobros[y].incluido=false;
   await dbSet("eco",id,e);
 }
 const ACT={
@@ -437,6 +444,8 @@ const ACT={
   async cobrar(d){ const e=S.eco[d.id]||{}; if(e.precio==null||e.precio===""){ aviso("Esta instalación no tiene precio. Ponlo antes en Editar.",true); return; }
     if(await guardar(()=>setCobro(d.id,d.y,{cobrado:true,fecha:iso(new Date())}),"Marcado como cobrado") && d.back) mVer(d.id); },
   async descobrar(d){ if(await guardar(()=>setCobro(d.id,d.y,{cobrado:false,fecha:""}),"Cobro deshecho") && d.back) mVer(d.id); },
+  async incluir(d){ if(await guardar(()=>setCobro(d.id,d.y,{incluido:true,cobrado:false,fecha:""}),"Marcado como incluido por primer año") && d.back) mVer(d.id); },
+  async noIncluir(d){ const c=((S.eco[d.id]||{}).cobros||{})[d.y]||{}; const p={incluido:false}; if(/^1\s*a[ñn]o$/i.test((c.nota||"").trim())) p.nota=""; if(await guardar(()=>setCobro(d.id,d.y,p),"Vuelve a contar como cobro normal") && d.back) mVer(d.id); },
   async notaCobro(d){ const c=((S.eco[d.id]||{}).cobros||{})[d.y]||{}; const n=prompt("Nota para el cobro de "+d.y+":",c.nota||""); if(n===null) return; await guardar(()=>setCobro(d.id,d.y,{nota:n.trim()}),"Nota guardada"); },
   importar(){
     const inp=document.createElement("input"); inp.type="file"; inp.accept=".json,application/json";
@@ -458,7 +467,7 @@ const ACT={
       const L=instsOrdenadas(), nom=id=>(S.insts[id]||{}).comunidad||id;
       const h1=L.map(i=>{const e=S.eco[i.id]||{};return {"Comunidad":i.comunidad,"Dirección":i.direccion,"Ciudad":i.ciudad,"Administrador":i.admin,"Persona de contacto":i.contacto,"Teléfono":i.telefono,"Nº cámaras":i.camaras,"Conexión":i.conexion==="wifi"?"WiFi":i.conexion==="red"?"Red":"","PVP mantenimiento":e.precio,"Nº de cuenta":e.cuenta,"Claves":i.claves,"Notas":i.notas};});
       const h2=Object.values(S.revs).sort((a,b)=>(b.anio-a.anio)||nom(a.instId).localeCompare(nom(b.instId),"es")).map(r=>{const o={"Comunidad":nom(r.instId),"Año":r.anio,"Periodo":PER[r.periodo],"Fecha":fFecha(r.fecha),"Técnico":r.tecnico,"Estado":r.hecha?"Hecha":"A medias"};CHECKS.forEach(c=>o[c.t]=(r.checks||{})[c.k]||"");o["Observaciones"]=r.obs;return o;});
-      const h3=[];L.forEach(i=>{const e=S.eco[i.id]||{};Object.keys(e.cobros||{}).sort().forEach(y=>{const c=e.cobros[y];h3.push({"Comunidad":i.comunidad,"Administrador":i.admin,"Año":Number(y),"Importe":e.precio,"Cobrado":c.cobrado?"Sí":"No","Fecha de cobro":fFecha(c.fecha),"Nota":c.nota});});});
+      const h3=[];L.forEach(i=>{const e=S.eco[i.id]||{};Object.keys(e.cobros||{}).sort().forEach(y=>{const c=e.cobros[y];h3.push({"Comunidad":i.comunidad,"Administrador":i.admin,"Año":Number(y),"Importe":e.precio,"Cobrado":c.cobrado?"Sí":esIncluido(c)?"Incluido 1er año":"No","Fecha de cobro":fFecha(c.fecha),"Nota":c.nota});});});
       const wb=XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(h1),"Instalaciones");
       XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(h2.length?h2:[{"Comunidad":""}]),"Revisiones");
