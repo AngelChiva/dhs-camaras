@@ -242,6 +242,12 @@ function proximaRevision(y,p,fecha){
 }
 function proximaTxt(y,p,fecha){ const d=proximaRevision(y,p,fecha); return fFecha(iso(d))+(d.getMonth()===2?" (cambio de hora de marzo)":" (cambio de hora de octubre)"); }
 function claveFirma(){ return "dhs_cam_firma_"+((UI.user&&UI.user.email)||"prueba").toLowerCase(); }
+/* Comunidades agrupadas por finca (administrador), sin distinguir mayúsculas */
+function gruposAdmin(){
+  const g={};
+  Object.entries(S.insts).forEach(([id,i])=>{ const n=(i.admin||"").trim(); if(!n) return; const k=n.toUpperCase(); const x=g[k]=g[k]||{k,nombre:n,ids:[],mails:[]}; x.ids.push(id); const m=correosFinca(i).join(", "); if(x.mails.indexOf(m)<0) x.mails.push(m); });
+  return Object.values(g).map(x=>Object.assign(x,{mail:x.mails.filter(Boolean)[0]||"",mezcla:x.mails.length>1})).sort((a,b)=>a.nombre.localeCompare(b.nombre,"es"));
+}
 function strip(id,y){
   let h='<div class="strip">';
   if(isAdmin()){ const c=estCobro(id,y); h+=`<span class="pill ${c.c}">Cobro ${y}: ${c.t}</span>`; }
@@ -359,14 +365,19 @@ function vAjustes(){
     const us=Object.entries(S.users).sort((a,b)=>a[0].localeCompare(b[0]));
     h+=`<div class="panel"><h3>Trabajadores</h3><div class="sub">Solo entran las cuentas de Google de esta lista. Si quitas a alguien, deja de poder entrar y de hacer cambios. El técnico ve las instalaciones y las claves y rellena revisiones; no ve precios ni cobros.</div>
     <ul class="list"><li><div class="nm"><b>${esc(ADMIN_EMAIL)}</b><span>Administrador principal</span></div></li>
-    ${us.map(([em,u])=>`<li><div class="nm"><b>${esc(u.nombre||em)}</b><span>${esc((u.nombre?em+" | ":"")+(u.rol==="admin"?"Administrador":"Técnico"))}</span></div><button class="btn sm danger" data-act="delUser" data-id="${esc(em)}">Quitar</button></li>`).join("")}</ul>
+    ${us.map(([em,u])=>`<li><div class="nm"><b>${esc(u.nombre||"(sin nombre)")}</b><span>${esc(em+" | "+(u.rol==="admin"?"Administrador":"Técnico"))}</span></div><button class="btn sm ghost" data-act="editUser" data-id="${esc(em)}">Editar</button><button class="btn sm danger" data-act="delUser" data-id="${esc(em)}">Quitar</button></li>`).join("")}${us.length?"":`<li><div class="nm"><span>Todavía no hay ningún trabajador dado de alta. Añádelo aquí debajo.</span></div></li>`}</ul>
     <label for="uNom">Nombre (el que sale en el acta como técnico)</label><input type="text" id="uNom" placeholder="Pedro">
     <div class="f2"><div><label for="uEm">Correo de Google</label><input type="email" id="uEm" placeholder="nombre@gmail.com"></div><div><label for="uRol">Permiso</label><select id="uRol"><option value="tecnico">Técnico</option><option value="admin">Administrador</option></select></div></div>
-    <div class="actions"><button class="btn" data-act="addUser">Dar acceso</button></div><p class="sub">Para cambiar el nombre o el permiso de alguien, vuelve a darle acceso con el mismo correo.</p></div>
+    <div class="actions"><button class="btn" data-act="addUser">Dar acceso</button></div><p class="sub">Para cambiar el nombre o el permiso de alguien, pulsa Editar, cámbialo y vuelve a pulsar «Dar acceso».</p></div>
     <div class="panel"><h3>Envío automático de actas</h3><div class="sub">${mailUrl()?"Activado. ":"Sin activar. "}Al guardar una revisión, el acta sale sola por correo desde ${esc(ADMIN_EMAIL)}: a la finca si todo está correcto y sin observaciones (con copia a DHS), y solo a DHS si hay alguna incidencia, observación o falta el correo de la finca.</div>
     <label for="cUrl">Dirección del servicio de envío (la que da Google Apps Script al implementar)</label><input type="text" id="cUrl" spellcheck="false" autocomplete="off" placeholder="https://script.google.com/macros/s/.../exec" value="${esc(mailUrl())}">
     <div class="actions"><button class="btn" data-act="guardarCfg">Guardar dirección</button><button class="btn ghost" data-act="probarCfg">Probar conexión</button></div></div>`;
   }
+  const gs=gruposAdmin(), sinAdm=Object.values(S.insts).filter(i=>!(i.admin||"").trim()).length;
+  h+=`<div class="panel"><h3>Fincas (administradores) y su correo</h3><div class="sub">El correo que pongas aquí es al que se envía el acta de todas las comunidades de esa finca. Al guardar se cambia en todas a la vez.${sinAdm?" Hay "+sinAdm+" comunidades sin administrador indicado; no salen en esta lista.":""}</div>
+    ${gs.length?gs.map(g=>`<div data-finca="${esc(g.k)}" style="border-top:1px solid var(--line);padding:10px 0 12px;margin-top:10px">
+      <div class="f2"><div><label>Finca</label><input type="text" data-f="nombre" value="${esc(g.nombre)}"></div><div><label>Correo para las actas</label><input type="email" multiple data-f="mail" autocomplete="off" placeholder="sin correo" value="${esc(g.mail)}"></div></div>
+      <div class="row" style="margin-top:8px"><button class="btn sm" data-act="guardarFinca">Guardar</button><span class="sub">${g.ids.length} ${g.ids.length===1?"comunidad":"comunidades"}${g.mezcla?". Ahora tienen correos distintos; al guardar quedan iguales":""}</span></div></div>`).join(""):`<p class="sub">Todavía no hay comunidades con administrador.</p>`}</div>`;
   h+=`<div class="panel"><h3>Copia para OneDrive</h3><div class="sub">Descarga un Excel con todas las comunidades, revisiones y cobros para guardarlo en la carpeta de DHS. Incluye las claves: guárdalo solo en un sitio seguro.</div><div class="actions"><button class="btn" data-act="excel">Exportar a Excel</button><button class="btn ghost" data-act="backup">Copia técnica (JSON)</button></div></div><div class="panel"><h3>Cargar datos desde un archivo</h3><div class="sub">Carga un archivo de copia (JSON), por ejemplo el de datos iniciales. Las comunidades que ya existan con el mismo identificador se sustituyen por las del archivo.</div><div class="actions"><button class="btn ghost" data-act="importar">Elegir archivo</button></div></div>`;
   if(UI.demo) h+=`<div class="panel"><h3>Modo prueba</h3><div class="sub">Borra lo apuntado en este navegador y vuelve a cargar las 15 comunidades del Excel.</div><div class="actions"><button class="btn danger" data-act="resetDemo">Empezar de cero</button></div></div>`;
   return h;
@@ -404,7 +415,8 @@ function mEditar(id){
   abrir(`<div class="mh"><h2>${id?"Editar instalación":"Nueva instalación"}</h2><button class="x" data-act="cerrar" aria-label="Cerrar">×</button></div>
   <label for="eCom">Comunidad</label><input type="text" id="eCom" value="${esc(i.comunidad)}" placeholder="CP Marte 8">
   <div class="f2"><div><label for="eDir">Dirección</label><input type="text" id="eDir" value="${esc(i.direccion)}"></div><div><label for="eCiu">Ciudad</label><input type="text" id="eCiu" value="${esc(i.ciudad)}"></div></div>
-  <label for="eAdm">Administrador de fincas</label><input type="text" id="eAdm" list="dlAdm" value="${esc(i.admin)}"><datalist id="dlAdm">${admins().map(a=>`<option value="${esc(a)}">`).join("")}</datalist>
+  <label for="eAdmSel">Finca (administrador)</label><select id="eAdmSel"><option value="">Sin administrador</option>${gruposAdmin().map(g=>`<option value="${esc(g.nombre)}" data-mail="${esc(g.mezcla?"":g.mail)}" ${g.k===(i.admin||"").trim().toUpperCase()?"selected":""}>${esc(g.nombre+(g.mail?" ("+g.mail+")":" (sin correo)"))}</option>`).join("")}<option value="__nueva__">+ Añadir una finca nueva…</option></select>
+  <div id="eAdmNueva" hidden><label for="eAdm">Nombre de la finca nueva</label><input type="text" id="eAdm" placeholder="Finques Exemple"><p class="sub" style="margin:4px 0 0">Al ser una finca nueva, pon también su correo aquí debajo: es obligatorio.</p></div>
   <div class="f2"><div><label for="eCon">Persona de contacto</label><input type="text" id="eCon" value="${esc(i.contacto)}"></div><div><label for="eTel">Teléfono</label><input type="tel" id="eTel" value="${esc(i.telefono)}"></div></div>
   <label for="eMail">Correo de la administración de fincas (ahí se envía el acta)</label><input type="email" id="eMail" multiple autocomplete="off" placeholder="administracion@finca.com" value="${esc(i.emailFinca)}">
   <div class="f2"><div><label for="eCam">Número de cámaras</label><input type="number" id="eCam" min="0" inputmode="numeric" value="${esc(i.camaras)}"></div>
@@ -562,10 +574,16 @@ const ACT={
   async guardarInst(d){
     const com=$("#eCom").value.trim(); if(!com){ aviso("Pon el nombre de la comunidad.",true); return; }
     const id=d.id||("i"+Date.now().toString(36));
-    const mailTxt=$("#eMail").value.trim(); const malos=mailTxt.split(/[,;\s]+/).filter(x=>x&&!RE_MAIL.test(x));
+    const selAdm=$("#eAdmSel").value, fincaNueva=selAdm==="__nueva__", admNom=fincaNueva?$("#eAdm").value.trim():selAdm;
+    if(fincaNueva&&!admNom){ aviso("Pon el nombre de la finca nueva.",true); return; }
+    if(fincaNueva&&gruposAdmin().some(x=>x.k===admNom.toUpperCase())){ aviso("Esa finca ya existe: elígela en el desplegable.",true); return; }
+    const mailTxt=$("#eMail").value.trim();
+    if(fincaNueva&&!mailTxt){ aviso("Pon el correo de la finca nueva: es obligatorio.",true); return; } const malos=mailTxt.split(/[,;\s]+/).filter(x=>x&&!RE_MAIL.test(x));
     if(malos.length){ aviso("Revisa el correo de la finca: «"+malos[0]+"» no es válido.",true); return; }
+    let mailFin=mailTxt.split(/[,;\s]+/).filter(Boolean).join(", ").toLowerCase();
+    if(!d.id&&!mailFin){ const g=gruposAdmin().find(x=>x.k===admNom.toUpperCase()); if(g&&!g.mezcla) mailFin=g.mail; }
     const cam=$("#eCam").value.trim(), pre=$("#ePre").value.trim();
-    const inst={comunidad:com,direccion:$("#eDir").value.trim(),ciudad:$("#eCiu").value.trim(),admin:$("#eAdm").value.trim(),contacto:$("#eCon").value.trim(),telefono:$("#eTel").value.trim(),emailFinca:mailTxt.split(/[,;\s]+/).filter(Boolean).join(", ").toLowerCase(),
+    const inst={comunidad:com,direccion:$("#eDir").value.trim(),ciudad:$("#eCiu").value.trim(),admin:admNom,contacto:$("#eCon").value.trim(),telefono:$("#eTel").value.trim(),emailFinca:mailFin,
       camaras:cam===""?null:Number(cam),conexion:$("#eSeg").dataset.v,claves:$("#eCla").value,notas:$("#eNot").value.trim()};
     const eco=Object.assign({cobros:{}},S.eco[id]||{},{precio:pre===""?null:Number(pre),cuenta:$("#eCue").value.trim()});
     if(await guardar(async()=>{ await dbSet("insts",id,inst); await dbSet("eco",id,eco); },"Instalación guardada")){ S.insts[id]=inst; S.eco[id]=eco; mVer(id); }
@@ -625,6 +643,16 @@ const ACT={
     inp.click();
   },
   async addUser(){ const em=$("#uEm").value.trim().toLowerCase(); if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(em)){ aviso("Escribe un correo válido.",true); return; } await guardar(()=>dbSet("users",em,{rol:$("#uRol").value,nombre:$("#uNom").value.trim()}),"Acceso dado a "+em); },
+  editUser(d){ const u=S.users[d.id]||{}; $("#uNom").value=u.nombre||""; $("#uEm").value=d.id; $("#uRol").value=u.rol==="admin"?"admin":"tecnico"; $("#uNom").scrollIntoView({block:"center"}); $("#uNom").focus(); },
+  async guardarFinca(d,el){
+    const fila=el.closest("[data-finca]"), g=gruposAdmin().find(x=>x.k===fila.dataset.finca); if(!g) return;
+    const nombre=fila.querySelector("[data-f=nombre]").value.trim(), txt=fila.querySelector("[data-f=mail]").value.trim();
+    if(!nombre){ aviso("Pon el nombre de la finca.",true); return; }
+    const malos=txt.split(/[,;\s]+/).filter(x=>x&&!RE_MAIL.test(x)); if(malos.length){ aviso("Revisa el correo: «"+malos[0]+"» no es válido.",true); return; }
+    const mail=txt.split(/[,;\s]+/).filter(Boolean).join(", ").toLowerCase();
+    el.disabled=true;
+    await guardar(async()=>{ for(const id of g.ids){ const n=Object.assign({},S.insts[id],{admin:nombre,emailFinca:mail}); await dbSet("insts",id,n); S.insts[id]=n; } }, nombre+": guardado en "+g.ids.length+(g.ids.length===1?" comunidad":" comunidades"));
+  },
   async guardarCfg(){ const u=$("#cUrl").value.trim(); if(u&&!/^https:\/\/script\.google\.com\/macros\/s\/[\w-]+\/exec$/.test(u)){ aviso("Esa dirección no es válida. Tiene que empezar por https://script.google.com/macros/s/ y acabar en /exec.",true); return; }
     if(await guardar(()=>fdb.collection(COL.insts).doc("_config").set({mailUrl:u}), u?"Envío automático activado":"Envío automático desactivado")){ S.cfg={mailUrl:u}; render(); } },
   async probarCfg(){ const u=$("#cUrl").value.trim(); if(!u){ aviso("Pega primero la dirección.",true); return; }
@@ -659,7 +687,8 @@ document.addEventListener("click",ev=>{
 });
 document.addEventListener("keydown",ev=>{ if(ev.key==="Escape") cerrar(); });
 document.addEventListener("input",ev=>{ if(ev.target.id==="fq"){ UI.q=ev.target.value; const pos=ev.target.selectionStart; render(); const n=$("#fq"); if(n){ n.focus(); n.setSelectionRange(pos,pos); } } });
-document.addEventListener("change",ev=>{ const m={fAdmin:"fAdmin",fCon:"fCon",fEst:"fEst"}; if(m[ev.target.id]){ UI[m[ev.target.id]]=ev.target.value; render(); } if(ev.target.id==="fYear"){ UI.year=Number(ev.target.value); render(); } });
+document.addEventListener("change",ev=>{ const m={fAdmin:"fAdmin",fCon:"fCon",fEst:"fEst"}; if(m[ev.target.id]){ UI[m[ev.target.id]]=ev.target.value; render(); } if(ev.target.id==="fYear"){ UI.year=Number(ev.target.value); render(); }
+  if(ev.target.id==="eAdmSel"){ const v=ev.target.value, nueva=v==="__nueva__"; $("#eAdmNueva").hidden=!nueva; if(nueva){ $("#eMail").value=""; $("#eAdm").focus(); } else { const o=ev.target.selectedOptions[0]; if(o&&o.dataset.mail) $("#eMail").value=o.dataset.mail; } } });
 
 /* ---------------- Arranque ---------------- */
 function cargarScript(src){ return new Promise((ok,ko)=>{ const s=document.createElement("script"); s.src=src; s.onload=ok; s.onerror=()=>ko(new Error("No se pudo cargar "+src)); document.head.appendChild(s); }); }
