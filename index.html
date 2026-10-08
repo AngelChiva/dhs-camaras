@@ -248,6 +248,7 @@ function render(){
   nav.hidden=false;
   nav.innerHTML=tabs.map(t=>`<button data-tab="${t[0]}" aria-current="${UI.tab===t[0]}">${t[1]}</button>`).join("");
   let h = UI.demo?`<div class="banner"><b>Modo prueba.</b> Lo que apuntes se guarda solo en este navegador y es para ver cómo funciona. No metas claves reales de cámaras hasta que la app esté publicada con inicio de sesión.</div>`:"";
+  if(!UI.demo && isAdmin()){ let u=0; try{ u=Number(localStorage.getItem("dhs_cam_ultima_copia"))||0; }catch(e){} const d=u?Math.floor((Date.now()-u)/864e5):null; if(d===null||d>=30) h+=`<div class="banner"><b>Toca hacer la copia de seguridad mensual.</b> ${d===null?"En este dispositivo todavía no se ha hecho ninguna.":"La última fue hace "+d+" días."} <button class="btn sm" data-act="backup" style="margin-left:6px">Descargar copia</button></div>`; }
   h += ({resumen:vResumen,insts:vInsts,cobros:vCobros,ajustes:vAjustes})[UI.tab]();
   app.innerHTML=h;
 }
@@ -476,7 +477,7 @@ const ACT={
       aviso("Excel descargado");
     }catch(e){ console.error(e); aviso("No se ha podido crear el Excel: "+(e.message||e),true); }
   },
-  backup(){ const a=document.createElement("a"); a.href=URL.createObjectURL(new Blob([JSON.stringify({fecha:new Date().toISOString(),instalaciones:S.insts,economia:S.eco,revisiones:S.revs},null,2)],{type:"application/json"})); a.download="dhs-camaras-copia-"+iso(new Date())+".json"; document.body.appendChild(a); a.click(); a.remove(); },
+  backup(){ const a=document.createElement("a"); a.href=URL.createObjectURL(new Blob([JSON.stringify({fecha:new Date().toISOString(),instalaciones:S.insts,economia:S.eco,revisiones:S.revs},null,2)],{type:"application/json"})); a.download="dhs-camaras-copia-"+iso(new Date())+".json"; document.body.appendChild(a); a.click(); a.remove(); try{ localStorage.setItem("dhs_cam_ultima_copia",String(Date.now())); }catch(e){} aviso("Copia descargada. Guárdala en la carpeta de DHS."); render(); },
   resetDemo(){ if(!confirm("¿Borrar los datos de prueba de este navegador?")) return; const sd=seedData(); S.insts=sd.insts; S.eco=sd.eco; S.revs={}; lsSave(); aviso("Datos de prueba reiniciados"); render(); }
 };
 
