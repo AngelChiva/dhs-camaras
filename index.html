@@ -147,13 +147,13 @@ const LS_KEY = "dhs_camaras_prueba_v1";
 
 /* Puntos del acta de mantenimiento de DHS (los 7 del documento) */
 const CHECKS = [
-  {k:"limpieza",  t:"Limpieza de cámaras",      o:["Realizado","No procede"]},
-  {k:"grabacion", t:"Revisión de grabación",    o:["Correcto","Incidencia"]},
-  {k:"retencion", t:"Retención 30 días",        o:["Correcto","Incidencia"]},
-  {k:"fechahora", t:"Fecha y hora",             o:["Ajustada","Incidencia"]},
-  {k:"disco",     t:"Disco duro / PoE",         o:["Correcto","Incidencia"]},
-  {k:"angulos",   t:"Ángulos / privacidad",     o:["Correcto","Ajustado"]},
-  {k:"carteles",  t:"Carteles videovigilancia", o:["Correcto","Renovar"]}
+  {k:"limpieza",  t:"Limpieza de cámaras",                     o:["Realizado","No procede"]},
+  {k:"grabacion", t:"Grabación",                               o:["Correcto","Incidencia"]},
+  {k:"retencion", t:"Conservación de imágenes (máx. un mes)",  o:["Correcto","Incidencia"]},
+  {k:"fechahora", t:"Fecha y hora",                            o:["Ajustada","Incidencia"]},
+  {k:"disco",     t:"Disco duro y alimentación",               o:["Correcto","Incidencia"]},
+  {k:"angulos",   t:"Ángulos y zonas de privacidad",           o:["Correcto","Ajustado"]},
+  {k:"carteles",  t:"Carteles informativos",                   o:["Correcto","Renovar"]}
 ];
 const ALERTA = ["Incidencia","Renovar"];
 const PER = {verano:"Verano", invierno:"Invierno"};
@@ -172,7 +172,7 @@ function seedData(){
 
 /* ---------------- Estado ---------------- */
 const HOY = new Date();
-const S = {insts:{},eco:{},revs:{},users:{}};
+const S = {insts:{},eco:{},revs:{},users:{},cfg:{}};
 const UI = {tab:"resumen", year:HOY.getFullYear(), q:"", fAdmin:"", fCon:"", fEst:"", role:null, user:null, ready:false, demo:!FIREBASE_CONFIG};
 let fdb=null;
 
@@ -225,6 +225,23 @@ function estCobro(id,y){
 }
 /* Primer año tras la instalación: el mantenimiento va incluido y no se cobra */
 function esIncluido(c){ return !!c && (c.incluido===true || /^1\s*a[ñn]o$/i.test((c.nota||"").trim())); }
+/* ---------- Envío del acta por correo ---------- */
+const RE_MAIL=/^[^@\s,;]+@[^@\s,;]+\.[^@\s,;]+$/;
+function correosFinca(i){ return String((i&&i.emailFinca)||"").split(/[,;\s]+/).map(x=>x.trim().toLowerCase()).filter(x=>RE_MAIL.test(x)); }
+function mailUrl(){ return UI.demo?"":String((S.cfg&&S.cfg.mailUrl)||""); }
+/* Motivos por los que un acta NO sale directa a la finca y pasa antes por DHS */
+function motivosDHS(i,r){ const m=[]; if(CHECKS.some(c=>ALERTA.includes((r.checks||{})[c.k]))) m.push("incidencia"); if((r.obs||"").trim()) m.push("observaciones"); if(!correosFinca(i).length) m.push("sin correo"); return m; }
+const MOTIVO_TXT={incidencia:"hay puntos con incidencia",observaciones:"el técnico ha escrito observaciones","sin correo":"la comunidad no tiene correo de la finca"};
+function motivoTxt(m){ return (m||[]).map(x=>MOTIVO_TXT[x]||x).join("; "); }
+/* Cambio de hora: último domingo de marzo o de octubre */
+function ultimoDomingo(anio,mes){ const d=new Date(anio,mes+1,0); d.setDate(d.getDate()-d.getDay()); return d; }
+/* El primer cambio de hora posterior a la revisión (y al cambio de hora que le tocaba a esa revisión) */
+function proximaRevision(y,p,fecha){
+  const propia=iso(p==="verano"?ultimoDomingo(y,2):ultimoDomingo(y,9)), desde=fecha&&fecha>propia?fecha:propia;
+  for(let a=y;a<y+3;a++) for(const m of [2,9]){ const d=ultimoDomingo(a,m); if(iso(d)>desde) return d; }
+}
+function proximaTxt(y,p,fecha){ const d=proximaRevision(y,p,fecha); return fFecha(iso(d))+(d.getMonth()===2?" (cambio de hora de marzo)":" (cambio de hora de octubre)"); }
+function claveFirma(){ return "dhs_cam_firma_"+((UI.user&&UI.user.email)||"prueba").toLowerCase(); }
 function strip(id,y){
   let h='<div class="strip">';
   if(isAdmin()){ const c=estCobro(id,y); h+=`<span class="pill ${c.c}">Cobro ${y}: ${c.t}</span>`; }
@@ -278,9 +295,11 @@ function vResumen(){
       <p class="sub" style="margin:6px 0 0">${sinCobrar.length} sin cobrar (${eur(total-cobrado)})${sinPrecio?`, y ${sinPrecio} instalaciones sin precio puesto`:""}.${nInc?` ${nInc} no se cobran este año por ser su primer año.`:""}</p>
       ${sinCobrar.length?`<ul class="list">`+sinCobrar.map(i=>`<li><div class="nm"><b>${esc(i.comunidad)}</b><span>${esc(i.admin||"")}</span></div><span>${eur(S.eco[i.id].precio)}</span><button class="btn sm ghost" data-act="cobrar" data-id="${i.id}" data-y="${y}">Marcar cobrado</button></li>`).join("")+`</ul>`:""}
     </div>`;
-    const f={cam:L.filter(i=>!i.camaras).length, con:L.filter(i=>!i.conexion).length, cla:L.filter(i=>!(i.claves||"").trim()).length, pre:sinPrecio};
-    if(f.cam+f.con+f.cla+f.pre) h+=`<div class="panel"><h3>Datos por completar</h3><div class="sub">Abre cada instalación y pulsa Editar.</div>
-      <dl><dt>Sin número de cámaras</dt><dd>${f.cam}</dd><dt>Sin tipo de conexión</dt><dd>${f.con}</dd><dt>Sin claves</dt><dd>${f.cla}</dd><dt>Sin precio</dt><dd>${f.pre}</dd></dl></div>`;
+    const esp=Object.values(S.revs).filter(r=>r.hecha&&r.envio&&r.envio.estado==="dhs"&&S.insts[r.instId]).sort((a,b)=>String(b.envio.fecha).localeCompare(String(a.envio.fecha)));
+    if(esp.length) h+=`<div class="panel"><h3>Actas sin enviar a la finca</h3><div class="sub">Han llegado solo al correo de DHS. Cuando esté hablado con la finca, abre el acta y pulsa «Enviar a la finca».</div><ul class="list">${esp.map(r=>`<li><div class="nm"><b>${esc(S.insts[r.instId].comunidad)}</b><span>${esc(PER[r.periodo]+" "+r.anio+": "+motivoTxt(r.envio.motivo))}</span></div><button class="btn sm ghost" data-act="rev" data-id="${r.instId}" data-y="${r.anio}" data-p="${r.periodo}">Ver acta</button></li>`).join("")}</ul></div>`;
+    const f={cam:L.filter(i=>!i.camaras).length, con:L.filter(i=>!i.conexion).length, cla:L.filter(i=>!(i.claves||"").trim()).length, pre:sinPrecio, mail:L.filter(i=>!correosFinca(i).length).length};
+    if(f.cam+f.con+f.cla+f.pre+f.mail) h+=`<div class="panel"><h3>Datos por completar</h3><div class="sub">Abre cada instalación y pulsa Editar.</div>
+      <dl><dt>Sin número de cámaras</dt><dd>${f.cam}</dd><dt>Sin tipo de conexión</dt><dd>${f.con}</dd><dt>Sin claves</dt><dd>${f.cla}</dd><dt>Sin precio</dt><dd>${f.pre}</dd><dt>Sin correo de la finca</dt><dd>${f.mail}</dd></dl></div>`;
   }
   h+=`<div class="panel"><h3>Instalaciones en mantenimiento</h3><dl><dt>Comunidades</dt><dd>${L.length}</dd><dt>Cámaras</dt><dd>${cam||"—"}</dd><dt>Por WiFi</dt><dd>${nW}</dd><dt>Por red (cable)</dt><dd>${nR}</dd><dt>Sin indicar</dt><dd>${L.length-nW-nR}</dd></dl></div>`;
   return h;
@@ -340,9 +359,13 @@ function vAjustes(){
     const us=Object.entries(S.users).sort((a,b)=>a[0].localeCompare(b[0]));
     h+=`<div class="panel"><h3>Trabajadores</h3><div class="sub">Solo entran las cuentas de Google de esta lista. Si quitas a alguien, deja de poder entrar y de hacer cambios. El técnico ve las instalaciones y las claves y rellena revisiones; no ve precios ni cobros.</div>
     <ul class="list"><li><div class="nm"><b>${esc(ADMIN_EMAIL)}</b><span>Administrador principal</span></div></li>
-    ${us.map(([em,u])=>`<li><div class="nm"><b>${esc(em)}</b><span>${u.rol==="admin"?"Administrador":"Técnico"}</span></div><button class="btn sm danger" data-act="delUser" data-id="${esc(em)}">Quitar</button></li>`).join("")}</ul>
+    ${us.map(([em,u])=>`<li><div class="nm"><b>${esc(u.nombre||em)}</b><span>${esc((u.nombre?em+" | ":"")+(u.rol==="admin"?"Administrador":"Técnico"))}</span></div><button class="btn sm danger" data-act="delUser" data-id="${esc(em)}">Quitar</button></li>`).join("")}</ul>
+    <label for="uNom">Nombre (el que sale en el acta como técnico)</label><input type="text" id="uNom" placeholder="Pedro">
     <div class="f2"><div><label for="uEm">Correo de Google</label><input type="email" id="uEm" placeholder="nombre@gmail.com"></div><div><label for="uRol">Permiso</label><select id="uRol"><option value="tecnico">Técnico</option><option value="admin">Administrador</option></select></div></div>
-    <div class="actions"><button class="btn" data-act="addUser">Dar acceso</button></div></div>`;
+    <div class="actions"><button class="btn" data-act="addUser">Dar acceso</button></div><p class="sub">Para cambiar el nombre o el permiso de alguien, vuelve a darle acceso con el mismo correo.</p></div>
+    <div class="panel"><h3>Envío automático de actas</h3><div class="sub">${mailUrl()?"Activado. ":"Sin activar. "}Al guardar una revisión, el acta sale sola por correo desde ${esc(ADMIN_EMAIL)}: a la finca si todo está correcto y sin observaciones (con copia a DHS), y solo a DHS si hay alguna incidencia, observación o falta el correo de la finca.</div>
+    <label for="cUrl">Dirección del servicio de envío (la que da Google Apps Script al implementar)</label><input type="text" id="cUrl" spellcheck="false" autocomplete="off" placeholder="https://script.google.com/macros/s/.../exec" value="${esc(mailUrl())}">
+    <div class="actions"><button class="btn" data-act="guardarCfg">Guardar dirección</button><button class="btn ghost" data-act="probarCfg">Probar conexión</button></div></div>`;
   }
   h+=`<div class="panel"><h3>Copia para OneDrive</h3><div class="sub">Descarga un Excel con todas las comunidades, revisiones y cobros para guardarlo en la carpeta de DHS. Incluye las claves: guárdalo solo en un sitio seguro.</div><div class="actions"><button class="btn" data-act="excel">Exportar a Excel</button><button class="btn ghost" data-act="backup">Copia técnica (JSON)</button></div></div><div class="panel"><h3>Cargar datos desde un archivo</h3><div class="sub">Carga un archivo de copia (JSON), por ejemplo el de datos iniciales. Las comunidades que ya existan con el mismo identificador se sustituyen por las del archivo.</div><div class="actions"><button class="btn ghost" data-act="importar">Elegir archivo</button></div></div>`;
   if(UI.demo) h+=`<div class="panel"><h3>Modo prueba</h3><div class="sub">Borra lo apuntado en este navegador y vuelve a cargar las 15 comunidades del Excel.</div><div class="actions"><button class="btn danger" data-act="resetDemo">Empezar de cero</button></div></div>`;
@@ -361,6 +384,7 @@ function mVer(id){
   <dl>${i.direccion?`<dt>Dirección</dt><dd>${esc(i.direccion)}</dd>`:""}${i.ciudad?`<dt>Ciudad</dt><dd>${esc(i.ciudad)}</dd>`:""}
   <dt>Administrador</dt><dd>${esc(i.admin||"—")}</dd>
   <dt>Contacto</dt><dd>${esc(i.contacto||"—")}${i.telefono?` | <a href="tel:${esc(String(i.telefono).replace(/\s/g,""))}">${esc(i.telefono)}</a>`:""}</dd>
+  <dt>Correo de la finca</dt><dd>${correosFinca(i).length?esc(correosFinca(i).join(", ")):"Sin indicar"}</dd>
   ${isAdmin()?`<dt>Precio</dt><dd>${e.precio!=null&&e.precio!==""?eur(e.precio)+" al año":"Sin precio"}</dd>${e.cuenta?`<dt>Nº de cuenta</dt><dd>${esc(e.cuenta)}</dd>`:""}`:""}
   ${i.notas?`<dt>Notas</dt><dd style="font-weight:400;white-space:pre-wrap">${esc(i.notas)}</dd>`:""}</dl>
   <h2>Claves de acceso</h2>
@@ -382,6 +406,7 @@ function mEditar(id){
   <div class="f2"><div><label for="eDir">Dirección</label><input type="text" id="eDir" value="${esc(i.direccion)}"></div><div><label for="eCiu">Ciudad</label><input type="text" id="eCiu" value="${esc(i.ciudad)}"></div></div>
   <label for="eAdm">Administrador de fincas</label><input type="text" id="eAdm" list="dlAdm" value="${esc(i.admin)}"><datalist id="dlAdm">${admins().map(a=>`<option value="${esc(a)}">`).join("")}</datalist>
   <div class="f2"><div><label for="eCon">Persona de contacto</label><input type="text" id="eCon" value="${esc(i.contacto)}"></div><div><label for="eTel">Teléfono</label><input type="tel" id="eTel" value="${esc(i.telefono)}"></div></div>
+  <label for="eMail">Correo de la administración de fincas (ahí se envía el acta)</label><input type="email" id="eMail" multiple autocomplete="off" placeholder="administracion@finca.com" value="${esc(i.emailFinca)}">
   <div class="f2"><div><label for="eCam">Número de cámaras</label><input type="number" id="eCam" min="0" inputmode="numeric" value="${esc(i.camaras)}"></div>
   <div><label>Conexión</label><div class="seg" id="eSeg" data-v="${con}"><button type="button" data-seg="wifi" aria-pressed="${con==="wifi"}">WiFi</button><button type="button" data-seg="red" aria-pressed="${con==="red"}">Red</button><button type="button" data-seg="" aria-pressed="${con===""}">Sin indicar</button></div></div></div>
   <div class="f2"><div><label for="ePre">Precio anual (€)</label><input type="number" id="ePre" min="0" step="0.01" inputmode="decimal" value="${esc(e.precio)}"></div><div><label for="eCue">Nº de cuenta</label><input type="text" id="eCue" value="${esc(e.cuenta)}"></div></div>
@@ -390,16 +415,131 @@ function mEditar(id){
   <div class="actions"><button class="btn" data-act="guardarInst" data-id="${id||""}">Guardar instalación</button><button class="btn ghost" data-act="${id?"ver":"cerrar"}" data-id="${id||""}">Cancelar</button></div>`);
 }
 
+const FIRMA={data:"",sucia:false};
+function iniciarFirma(inicial){
+  const c=$("#rFirma"); FIRMA.data=inicial||""; FIRMA.sucia=false; if(!c) return;
+  const x=c.getContext("2d"); if(!x) return;
+  x.lineWidth=3.2; x.lineCap="round"; x.lineJoin="round"; x.strokeStyle="#14233b";
+  if(inicial){ const im=new Image(); im.onload=()=>x.drawImage(im,0,0,c.width,c.height); im.src=inicial; }
+  let dib=false;
+  const pos=e=>{ const b=c.getBoundingClientRect(); return [(e.clientX-b.left)*c.width/b.width,(e.clientY-b.top)*c.height/b.height]; };
+  c.onpointerdown=e=>{ e.preventDefault(); dib=true; try{ c.setPointerCapture(e.pointerId); }catch(_){} const q=pos(e); x.beginPath(); x.moveTo(q[0],q[1]); x.lineTo(q[0]+0.1,q[1]+0.1); x.stroke(); };
+  c.onpointermove=e=>{ if(!dib) return; e.preventDefault(); const q=pos(e); x.lineTo(q[0],q[1]); x.stroke(); };
+  c.onpointerup=c.onpointercancel=()=>{ if(!dib) return; dib=false; FIRMA.sucia=true; FIRMA.data=c.toDataURL("image/png"); };
+}
+function estadoEnvio(r){
+  const e=r.envio, f=e?fFecha(String(e.fecha||"").slice(0,10)):"";
+  if(e&&e.estado==="finca") return {c:"ok",t:"Enviada a la finca el "+f,d:(e.para||[]).join(", ")};
+  if(e&&e.estado==="dhs") return {c:"warn",t:"Enviada solo a DHS el "+f,d:"No ha salido a la finca porque "+motivoTxt(e.motivo)+"."};
+  return {c:"",t:"Sin enviar por correo",d:""};
+}
 function mRev(id,y,p){
   const i=S.insts[id]; if(!i) return; const r=S.revs[revId(id,y,p)]||{checks:{}};
-  const tec=r.tecnico||(UI.user&&(UI.user.displayName||UI.user.email))||"";
+  const adm=isAdmin(), fec=r.fecha||iso(new Date()), tec=r.tecnico||UI.nombre||"", mails=correosFinca(i), dat=`data-id="${id}" data-y="${y}" data-p="${p}"`;
+  let envio="";
+  if(r.hecha){
+    const e=estadoEnvio(r), on=!!mailUrl();
+    envio=`<div class="panel" style="margin-top:12px;background:#f4f6fa"><b>Envío del acta</b>
+      <div style="margin:6px 0"><span class="pill ${e.c}">${esc(e.t)}</span></div>${e.d?`<div class="sub">${esc(e.d)}</div>`:""}
+      ${on?"":`<div class="sub">El envío automático por correo todavía no está activado${adm?" (se activa en Ajustes)":""}. Mientras tanto puedes descargar el PDF.</div>`}
+      <div class="actions" style="margin-top:10px">
+      ${on&&!r.envio?`<button class="btn" data-act="mandarActa" data-d="auto" ${dat}>Enviar ahora</button>`:""}
+      ${on&&adm&&r.envio&&mails.length?`<button class="btn" data-act="mandarActa" data-d="finca" ${dat}>${r.envio.estado==="finca"?"Reenviar a la finca":"Enviar a la finca"}</button>`:""}
+      <button class="btn ghost" data-act="pdfActa" ${dat}>Descargar PDF</button>${navigator.share?`<button class="btn ghost" data-act="enviarActa" ${dat}>Compartir</button>`:""}</div></div>`;
+  }
   abrir(`<div class="mh"><h2>Acta de mantenimiento<br><span class="sub" style="font-weight:400">${esc(i.comunidad)}, ${PER[p].toLowerCase()} ${y}</span></h2><button class="x" data-act="cerrar" aria-label="Cerrar">×</button></div>
-  <div class="f2"><div><label for="rFec">Fecha del mantenimiento</label><input type="date" id="rFec" value="${esc(r.fecha||iso(HOY))}"></div><div><label for="rTec">Técnico DHS</label><input type="text" id="rTec" value="${esc(tec)}"></div></div>
-  <h2>Revisión realizada</h2>
+  ${adm?`<div class="f2"><div><label for="rFec">Fecha de la revisión</label><input type="date" id="rFec" value="${esc(fec)}"></div><div><label for="rTec">Técnico DHS</label><input type="text" id="rTec" value="${esc(tec)}"></div></div>`:""}
+  <dl>${adm?"":`<dt>Fecha de la revisión</dt><dd>${esc(fFecha(fec))}</dd><dt>Técnico DHS</dt><dd>${esc(tec)}</dd>`}<dt>Próxima revisión</dt><dd>${esc(proximaTxt(y,p,fec))}</dd><dt>Correo de la finca</dt><dd>${mails.length?esc(mails.join(", ")):"Sin indicar"}</dd></dl>
+  <div class="row"><h2 style="margin:8px 0;flex:1">Revisión realizada</h2><button class="btn sm ghost" data-act="todoOk">Todo correcto</button></div>
   <div id="rChk">${CHECKS.map((c,n)=>`<div class="chk"><span>${n+1}. ${c.t}</span><div class="seg" data-k="${c.k}" data-v="${esc((r.checks||{})[c.k]||"")}">${c.o.map(o=>`<button type="button" data-seg="${o}" class="${ALERTA.includes(o)?"alert":""}" aria-pressed="${(r.checks||{})[c.k]===o}">${o}</button>`).join("")}</div></div>`).join("")}</div>
   <label for="rObs">Observaciones</label><textarea id="rObs">${esc(r.obs)}</textarea>
-  <p class="sub">La revisión queda como hecha cuando los 7 puntos están marcados.</p>
-  <div class="actions"><button class="btn" data-act="guardarRev" data-id="${id}" data-y="${y}" data-p="${p}">Guardar revisión</button><button class="btn ghost" data-act="ver" data-id="${id}">Volver</button><span class="sp"></span>${isAdmin()&&S.revs[revId(id,y,p)]?`<button class="btn danger" data-act="borrarRev" data-id="${id}" data-y="${y}" data-p="${p}">Borrar acta</button>`:""}</div>`);
+  <label for="rFirma">Firma del técnico</label>
+  <canvas id="rFirma" width="600" height="180" style="display:block;width:100%;height:150px;background:#fff;border:1px solid #b9c4d4;border-radius:7px;touch-action:none"></canvas>
+  <div class="row" style="margin-top:6px"><button class="btn sm ghost" data-act="borrarFirma">Borrar firma</button><span class="sub">Firma con el dedo. Se recuerda en este móvil.</span></div>
+  <p class="sub">La revisión queda hecha con los 7 puntos marcados y la firma. ${mailUrl()?(r.envio?"":"Al guardar, el acta sale sola por correo: a la finca si todo está correcto y sin observaciones; si hay alguna incidencia u observación, llega solo a DHS."):""}</p>
+  ${envio}
+  <div class="actions"><button class="btn" data-act="guardarRev" ${dat}>Guardar revisión</button><button class="btn ghost" data-act="ver" data-id="${id}">Volver</button><span class="sp"></span>${adm&&S.revs[revId(id,y,p)]?`<button class="btn danger" data-act="borrarRev" ${dat}>Borrar acta</button>`:""}</div>`);
+  let ini=r.firma||""; if(!ini&&!r.hecha){ try{ ini=localStorage.getItem(claveFirma())||""; }catch(e){} }
+  iniciarFirma(ini);
+}
+
+
+/* ---------------- Acta en PDF ---------------- */
+const EMPRESA={nombre:"DHS VIDEOPORTERS S.L.",cif:"B21922653",dir:"C/ Pau Marsal 77, 08222 Terrassa"};
+function construirActa(JsPDF,d){
+  const doc=new JsPDF({unit:"mm",format:"a4",compress:true}); const W=210, M=18; let y=0;
+  doc.setFillColor(22,35,58); doc.rect(0,0,W,34,"F");
+  if(d.logo){ try{ doc.addImage(d.logo,"PNG",M,7,20,20,"logo"); }catch(e){} }
+  doc.setTextColor(255,255,255); doc.setFont("helvetica","bold"); doc.setFontSize(15); doc.text("Acta de mantenimiento de videovigilancia",M+26,16);
+  doc.setFont("helvetica","normal"); doc.setFontSize(9.5); doc.text(EMPRESA.nombre+"  |  CIF "+EMPRESA.cif+"  |  "+EMPRESA.dir,M+26,23);
+  y=45; doc.setTextColor(20,35,59);
+  const campo=(et,val,x,w)=>{ doc.setFont("helvetica","normal"); doc.setFontSize(8.5); doc.setTextColor(95,105,125); doc.text(et,x,y);
+    doc.setFont("helvetica","bold"); doc.setFontSize(11); doc.setTextColor(20,35,59); const l=doc.splitTextToSize(val||"-",w); doc.text(l,x,y+5.5); return l.length; };
+  let n=Math.max(campo("Comunidad",d.comunidad,M,84), campo("Administrador de fincas",d.admin,M+92,82)); y+=8.5+n*5;
+  n=Math.max(campo("Dirección",[d.direccion,d.ciudad].filter(Boolean).join(", "),M,84), campo("Revisión",d.periodo,M+92,82)); y+=8.5+n*5;
+  n=Math.max(campo("Fecha de la revisión",d.fecha,M,84), campo("Técnico DHS",d.tecnico,M+92,82)); y+=8.5+n*5;
+  n=campo("Próxima revisión prevista",d.proxima,M,170); y+=8.5+n*5+2;
+  doc.setFont("helvetica","bold"); doc.setFontSize(12); doc.text("Revisión realizada",M,y); y+=4;
+  doc.setDrawColor(200,208,220); doc.setLineWidth(0.3); doc.line(M,y,W-M,y);
+  d.checks.forEach((c,i)=>{ y+=8; doc.setFont("helvetica","normal"); doc.setFontSize(11); doc.setTextColor(20,35,59); doc.text((i+1)+". "+c.t,M+1,y);
+    if(c.alerta){ doc.setFillColor(253,241,211); doc.roundedRect(W-M-46,y-5,46,7,1.5,1.5,"F"); doc.setTextColor(140,90,0); }
+    else { doc.setFillColor(226,244,234); doc.roundedRect(W-M-46,y-5,46,7,1.5,1.5,"F"); doc.setTextColor(27,110,70); }
+    doc.setFont("helvetica","bold"); doc.setFontSize(10.5); doc.text(c.v||"-",W-M-23,y,{align:"center"});
+    doc.setDrawColor(225,230,238); doc.line(M,y+3,W-M,y+3); });
+  y+=12; doc.setTextColor(20,35,59); doc.setFont("helvetica","bold"); doc.setFontSize(12); doc.text("Observaciones",M,y); y+=6;
+  doc.setFont("helvetica","normal"); doc.setFontSize(10.5);
+  const obs=doc.splitTextToSize(d.obs||"Sin observaciones.",W-2*M), cab=Math.max(1,Math.floor((230-y)/5));
+  doc.text(obs.slice(0,cab),M,y);
+  /* firma del técnico y sello de DHS */
+  doc.setFont("helvetica","normal"); doc.setFontSize(8.5); doc.setTextColor(95,105,125); doc.text("Firma del técnico",M,238);
+  if(d.firma){ try{ doc.addImage(d.firma,"PNG",M,239,66,19.8,"firma"); }catch(e){} }
+  doc.setDrawColor(120,130,150); doc.setLineWidth(0.3); doc.line(M,259,M+70,259);
+  doc.setFontSize(9.5); doc.setTextColor(20,35,59); doc.text(d.tecnico||"",M,264);
+  const sx=W-M-76; doc.setDrawColor(22,35,58); doc.setLineWidth(0.5); doc.roundedRect(sx,237,76,27,2,2,"S");
+  if(d.logo){ try{ doc.addImage(d.logo,"PNG",sx+3,240.5,20,20,"logo"); }catch(e){} }
+  doc.setFont("helvetica","bold"); doc.setFontSize(9.5); doc.text(EMPRESA.nombre,sx+26,246);
+  doc.setFont("helvetica","normal"); doc.setFontSize(8.5); doc.text("CIF "+EMPRESA.cif,sx+26,251); doc.text(doc.splitTextToSize(EMPRESA.dir,47),sx+26,255.5);
+  doc.setFontSize(8); doc.setTextColor(95,105,125);
+  doc.text(doc.splitTextToSize("DHS Videoporters realiza únicamente labores técnicas de mantenimiento. No accede al visionado de las imágenes de forma autónoma; cualquier extracción se hace bajo orden del presidente o del administrador de la comunidad.",W-2*M),M,273);
+  doc.setTextColor(120,130,150); doc.text("Documento generado el "+d.generado,W-M,288,{align:"right"});
+  if(obs.length>cab){ doc.addPage(); doc.setTextColor(20,35,59); doc.setFont("helvetica","bold"); doc.setFontSize(12); doc.text("Observaciones (continuación)",M,24);
+    doc.setFont("helvetica","normal"); doc.setFontSize(10.5); doc.text(obs.slice(cab,cab+50),M,32); }
+  return doc;
+}
+async function pdfDeActa(id,y,p){
+  const i=S.insts[id], r=S.revs[revId(id,y,p)]; if(!i||!r) throw new Error("no encuentro el acta");
+  if(!window.jspdf) await cargarScript("https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js");
+  const logo=(document.querySelector('link[rel="apple-touch-icon"]')||{}).href||"";
+  const doc=construirActa(window.jspdf.jsPDF,{logo,comunidad:i.comunidad,admin:i.admin,direccion:i.direccion,ciudad:i.ciudad,periodo:PER[p]+" "+y+(p==="verano"?" (cambio de hora de marzo)":" (cambio de hora de octubre)"),
+    fecha:fFecha(r.fecha),tecnico:r.tecnico,obs:r.obs,firma:r.firma||"",proxima:proximaTxt(y,p,r.fecha),generado:fFecha(iso(new Date())),
+    checks:CHECKS.map(c=>({t:c.t,v:(r.checks||{})[c.k]||"",alerta:ALERTA.includes((r.checks||{})[c.k])}))});
+  const nombre=("Acta mantenimiento "+i.comunidad+" "+PER[p]+" "+y).replace(/[\\/:*?"<>|]+/g," ").replace(/\s+/g," ").trim()+".pdf";
+  return {doc,nombre};
+}
+async function actaPDF(id,y,p,compartir){
+  try{
+    const {doc,nombre}=await pdfDeActa(id,y,p);
+    if(compartir){
+      const f=new File([doc.output("blob")],nombre,{type:"application/pdf"});
+      if(navigator.canShare&&navigator.canShare({files:[f]})){ try{ await navigator.share({files:[f],title:nombre}); }catch(e){} return; }
+    }
+    doc.save(nombre); aviso("Acta descargada");
+  }catch(e){ console.error(e); aviso("No se ha podido crear el PDF: "+(e.message||e),true); }
+}
+/* Manda el acta al servicio de envío. Quién la recibe lo decide el servicio leyendo el acta guardada, no este navegador. */
+async function enviarCorreoActa(id,y,p,destino){
+  const k=revId(id,y,p), url=mailUrl(); if(!url||!S.revs[k]) return false;
+  try{
+    const {doc,nombre}=await pdfDeActa(id,y,p);
+    const pdf=doc.output("datauristring").split(",").pop();
+    const idToken=await firebase.auth().currentUser.getIdToken();
+    const res=await fetch(url,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify({idToken,revId:k,destino,pdf,nombre})});
+    const j=await res.json();
+    if(!j.ok) throw new Error(j.error||"respuesta no válida");
+    if(j.envio) S.revs[k]=Object.assign({},S.revs[k],{envio:j.envio});
+    aviso(j.repetido?"Esta acta ya estaba enviada":(j.envio&&j.envio.estado==="finca"?"Acta enviada a la finca":"Acta enviada solo a DHS, para revisarla antes de mandarla a la finca"));
+    return true;
+  }catch(e){ console.error(e); aviso("El acta no se ha podido enviar por correo: "+(e.message||e)+". La revisión sí está guardada; reinténtalo desde el acta.",true); return false; }
 }
 
 /* ---------------- Acciones ---------------- */
@@ -422,8 +562,10 @@ const ACT={
   async guardarInst(d){
     const com=$("#eCom").value.trim(); if(!com){ aviso("Pon el nombre de la comunidad.",true); return; }
     const id=d.id||("i"+Date.now().toString(36));
+    const mailTxt=$("#eMail").value.trim(); const malos=mailTxt.split(/[,;\s]+/).filter(x=>x&&!RE_MAIL.test(x));
+    if(malos.length){ aviso("Revisa el correo de la finca: «"+malos[0]+"» no es válido.",true); return; }
     const cam=$("#eCam").value.trim(), pre=$("#ePre").value.trim();
-    const inst={comunidad:com,direccion:$("#eDir").value.trim(),ciudad:$("#eCiu").value.trim(),admin:$("#eAdm").value.trim(),contacto:$("#eCon").value.trim(),telefono:$("#eTel").value.trim(),
+    const inst={comunidad:com,direccion:$("#eDir").value.trim(),ciudad:$("#eCiu").value.trim(),admin:$("#eAdm").value.trim(),contacto:$("#eCon").value.trim(),telefono:$("#eTel").value.trim(),emailFinca:mailTxt.split(/[,;\s]+/).filter(Boolean).join(", ").toLowerCase(),
       camaras:cam===""?null:Number(cam),conexion:$("#eSeg").dataset.v,claves:$("#eCla").value,notas:$("#eNot").value.trim()};
     const eco=Object.assign({cobros:{}},S.eco[id]||{},{precio:pre===""?null:Number(pre),cuenta:$("#eCue").value.trim()});
     if(await guardar(async()=>{ await dbSet("insts",id,inst); await dbSet("eco",id,eco); },"Instalación guardada")){ S.insts[id]=inst; S.eco[id]=eco; mVer(id); }
@@ -433,13 +575,35 @@ const ACT={
     const revs=Object.keys(S.revs).filter(k=>S.revs[k].instId===d.id);
     if(await guardar(async()=>{ for(const k of revs) await dbDel("revs",k); await dbDel("eco",d.id); await dbDel("insts",d.id); },"Instalación dada de baja")) cerrar();
   },
-  async guardarRev(d){
+  pdfActa(d){ actaPDF(d.id,Number(d.y),d.p,false); },
+  enviarActa(d){ actaPDF(d.id,Number(d.y),d.p,true); },
+  todoOk(){ document.querySelectorAll("#rChk .seg").forEach(b=>{ const o=b.querySelector("button"); b.dataset.v=o.dataset.seg; b.querySelectorAll("button").forEach(x=>x.setAttribute("aria-pressed",x===o)); }); },
+  borrarFirma(){ const c=$("#rFirma"); if(c){ const x=c.getContext("2d"); if(x) x.clearRect(0,0,c.width,c.height); } FIRMA.data=""; FIRMA.sucia=true; },
+  async mandarActa(d,el){
+    const y=Number(d.y), i=S.insts[d.id];
+    if(d.d==="finca"&&!confirm("Se va a enviar el acta a "+correosFinca(i).join(", ")+". ¿Continuar?")) return;
+    if(el) el.disabled=true; aviso("Enviando el acta…");
+    await enviarCorreoActa(d.id,y,d.p,d.d==="finca"?"finca":"auto"); mRev(d.id,y,d.p);
+  },
+  async guardarRev(d,el){
+    const y=Number(d.y), k=revId(d.id,y,d.p), prev=S.revs[k]||{};
     const checks={}; document.querySelectorAll("#rChk .seg").forEach(s=>{ if(s.dataset.v) checks[s.dataset.k]=s.dataset.v; });
-    const hecha=CHECKS.every(c=>checks[c.k]); const y=Number(d.y);
-    const r={instId:d.id,anio:y,periodo:d.p,fecha:$("#rFec").value,tecnico:$("#rTec").value.trim(),checks,obs:$("#rObs").value.trim(),hecha};
-    if(hecha&&!r.fecha){ aviso("Pon la fecha del mantenimiento.",true); return; }
-    const k=revId(d.id,y,d.p);
-    if(await guardar(()=>dbSet("revs",k,r), hecha?"Revisión guardada como hecha":"Guardada a medias: faltan puntos por marcar")){ S.revs[k]=r; mVer(d.id); }
+    const hecha=CHECKS.every(c=>checks[c.k]), firma=FIRMA.data||"";
+    if(hecha&&!firma){ aviso("Falta la firma del técnico.",true); return; }
+    const fEl=$("#rFec"), tEl=$("#rTec");
+    const r={instId:d.id,anio:y,periodo:d.p,
+      fecha:fEl?fEl.value:(prev.hecha&&prev.fecha?prev.fecha:iso(new Date())),
+      tecnico:tEl?tEl.value.trim():(prev.hecha&&prev.tecnico?prev.tecnico:(UI.nombre||"")),
+      checks,obs:$("#rObs").value.trim(),hecha,firma};
+    if(prev.envio) r.envio=prev.envio;
+    if(hecha&&!r.fecha){ aviso("Pon la fecha de la revisión.",true); return; }
+    if(el) el.disabled=true;
+    if(!await guardar(()=>dbSet("revs",k,r), hecha?"":"Guardada a medias: faltan puntos por marcar")){ if(el) el.disabled=false; return; }
+    S.revs[k]=r; if(firma&&FIRMA.sucia){ try{ localStorage.setItem(claveFirma(),firma); }catch(e){} }
+    if(!hecha){ mVer(d.id); return; }
+    if(!r.envio&&mailUrl()){ aviso("Revisión guardada. Enviando el acta…"); await enviarCorreoActa(d.id,y,d.p,"auto"); }
+    else aviso(r.envio?"Revisión guardada":"Revisión guardada. El envío por correo aún no está activado: descarga el PDF.");
+    mRev(d.id,y,d.p);
   },
   async borrarRev(d){ if(!confirm("¿Borrar esta acta?")) return; const k=revId(d.id,Number(d.y),d.p); if(await guardar(()=>dbDel("revs",k),"Acta borrada")){ delete S.revs[k]; mVer(d.id); } },
   async cobrar(d){ const e=S.eco[d.id]||{}; if(e.precio==null||e.precio===""){ aviso("Esta instalación no tiene precio. Ponlo antes en Editar.",true); return; }
@@ -460,14 +624,19 @@ const ACT={
     };
     inp.click();
   },
-  async addUser(){ const em=$("#uEm").value.trim().toLowerCase(); if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(em)){ aviso("Escribe un correo válido.",true); return; } await guardar(()=>dbSet("users",em,{rol:$("#uRol").value}),"Acceso dado a "+em); },
+  async addUser(){ const em=$("#uEm").value.trim().toLowerCase(); if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(em)){ aviso("Escribe un correo válido.",true); return; } await guardar(()=>dbSet("users",em,{rol:$("#uRol").value,nombre:$("#uNom").value.trim()}),"Acceso dado a "+em); },
+  async guardarCfg(){ const u=$("#cUrl").value.trim(); if(u&&!/^https:\/\/script\.google\.com\/macros\/s\/[\w-]+\/exec$/.test(u)){ aviso("Esa dirección no es válida. Tiene que empezar por https://script.google.com/macros/s/ y acabar en /exec.",true); return; }
+    if(await guardar(()=>fdb.collection(COL.insts).doc("_config").set({mailUrl:u}), u?"Envío automático activado":"Envío automático desactivado")){ S.cfg={mailUrl:u}; render(); } },
+  async probarCfg(){ const u=$("#cUrl").value.trim(); if(!u){ aviso("Pega primero la dirección.",true); return; }
+    try{ const t=await (await fetch(u+"?ping=1")).text(); if(t.indexOf("DHS actas")<0) throw new Error("ha respondido otra cosa"); aviso("Conexión correcta: el servicio de envío responde"); }
+    catch(e){ aviso("No responde: "+(e.message||e)+". Revisa que esté implementado con acceso «Cualquier usuario».",true); } },
   async delUser(d){ if(confirm("¿Quitar el acceso a "+d.id+"?")) await guardar(()=>dbDel("users",d.id),"Acceso quitado"); },
   async excel(){
     try{
       if(!window.XLSX) await cargarScript("https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js");
       const L=instsOrdenadas(), nom=id=>(S.insts[id]||{}).comunidad||id;
-      const h1=L.map(i=>{const e=S.eco[i.id]||{};return {"Comunidad":i.comunidad,"Dirección":i.direccion,"Ciudad":i.ciudad,"Administrador":i.admin,"Persona de contacto":i.contacto,"Teléfono":i.telefono,"Nº cámaras":i.camaras,"Conexión":i.conexion==="wifi"?"WiFi":i.conexion==="red"?"Red":"","PVP mantenimiento":e.precio,"Nº de cuenta":e.cuenta,"Claves":i.claves,"Notas":i.notas};});
-      const h2=Object.values(S.revs).sort((a,b)=>(b.anio-a.anio)||nom(a.instId).localeCompare(nom(b.instId),"es")).map(r=>{const o={"Comunidad":nom(r.instId),"Año":r.anio,"Periodo":PER[r.periodo],"Fecha":fFecha(r.fecha),"Técnico":r.tecnico,"Estado":r.hecha?"Hecha":"A medias"};CHECKS.forEach(c=>o[c.t]=(r.checks||{})[c.k]||"");o["Observaciones"]=r.obs;return o;});
+      const h1=L.map(i=>{const e=S.eco[i.id]||{};return {"Comunidad":i.comunidad,"Dirección":i.direccion,"Ciudad":i.ciudad,"Administrador":i.admin,"Persona de contacto":i.contacto,"Teléfono":i.telefono,"Correo finca":i.emailFinca||"","Nº cámaras":i.camaras,"Conexión":i.conexion==="wifi"?"WiFi":i.conexion==="red"?"Red":"","PVP mantenimiento":e.precio,"Nº de cuenta":e.cuenta,"Claves":i.claves,"Notas":i.notas};});
+      const h2=Object.values(S.revs).sort((a,b)=>(b.anio-a.anio)||nom(a.instId).localeCompare(nom(b.instId),"es")).map(r=>{const o={"Comunidad":nom(r.instId),"Año":r.anio,"Periodo":PER[r.periodo],"Fecha":fFecha(r.fecha),"Técnico":r.tecnico,"Estado":r.hecha?"Hecha":"A medias"};CHECKS.forEach(c=>o[c.t]=(r.checks||{})[c.k]||"");o["Observaciones"]=r.obs;o["Envío del acta"]=r.envio?(r.envio.estado==="finca"?"Enviada a la finca":"Solo a DHS: "+motivoTxt(r.envio.motivo)):"";return o;});
       const h3=[];L.forEach(i=>{const e=S.eco[i.id]||{};Object.keys(e.cobros||{}).sort().forEach(y=>{const c=e.cobros[y];h3.push({"Comunidad":i.comunidad,"Administrador":i.admin,"Año":Number(y),"Importe":e.precio,"Cobrado":c.cobrado?"Sí":esIncluido(c)?"Incluido 1er año":"No","Fecha de cobro":fFecha(c.fecha),"Nota":c.nota});});});
       const wb=XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(h1),"Instalaciones");
@@ -499,7 +668,7 @@ function iniciarDemo(){
   const g=lsLoad();
   if(g&&g.insts){ Object.assign(S,{insts:g.insts,eco:g.eco||{},revs:g.revs||{},users:{}}); }
   else { const sd=seedData(); S.insts=sd.insts; S.eco=sd.eco; }
-  UI.role="admin"; UI.ready=true; render();
+  UI.role="admin"; UI.nombre="Técnico de prueba"; UI.ready=true; render();
 }
 
 async function iniciarFirebase(){
@@ -508,15 +677,15 @@ async function iniciarFirebase(){
   firebase.initializeApp(FIREBASE_CONFIG); fdb=firebase.firestore();
   let bajas=[];
   firebase.auth().onAuthStateChanged(async u=>{
-    bajas.forEach(f=>f()); bajas=[]; UI.user=u; UI.ready=false; UI.role=null; Object.assign(S,{insts:{},eco:{},revs:{},users:{}});
+    bajas.forEach(f=>f()); bajas=[]; UI.user=u; UI.ready=false; UI.role=null; Object.assign(S,{insts:{},eco:{},revs:{},users:{},cfg:{}}); UI.nombre="";
     if(!u){ render(); pantallaLogin(); return; }
     const em=(u.email||"").toLowerCase();
     try{
-      if(em===ADMIN_EMAIL.toLowerCase()) UI.role="admin";
-      else { const d=await fdb.collection(COL.users).doc(em).get(); UI.role=d.exists?(d.data().rol==="admin"?"admin":"tecnico"):null; }
+      if(em===ADMIN_EMAIL.toLowerCase()){ UI.role="admin"; UI.nombre=u.displayName||"DHS Videoporters"; }
+      else { const d=await fdb.collection(COL.users).doc(em).get(); UI.role=d.exists?(d.data().rol==="admin"?"admin":"tecnico"):null; UI.nombre=(d.exists&&d.data().nombre)||u.displayName||em; }
     }catch(e){ UI.role=null; }
     if(!UI.role){ render(); $("#app").innerHTML=`<div class="panel login"><h2>Sin acceso</h2><p class="sub">La cuenta ${esc(em)} no está autorizada. Pide al administrador que te dé acceso desde Ajustes.</p><button class="btn" data-act="salir">Entrar con otra cuenta</button></div>`; return; }
-    const escuchar=col=>{ bajas.push(fdb.collection(COL[col]).onSnapshot(sn=>{ const o={}; sn.forEach(d=>o[d.id]=d.data()); S[col]=o; if(!$("#ov").classList.contains("on")) render(); }, e=>{ console.error(e); aviso("No se han podido leer los datos ("+col+"). Revisa la conexión.",true); })); };
+    const escuchar=col=>{ bajas.push(fdb.collection(COL[col]).onSnapshot(sn=>{ const o={}; sn.forEach(d=>o[d.id]=d.data()); if(col==="insts"){ S.cfg=o._config||{}; delete o._config; } S[col]=o; if(!$("#ov").classList.contains("on")) render(); }, e=>{ console.error(e); aviso("No se han podido leer los datos ("+col+"). Revisa la conexión.",true); })); };
     escuchar("insts"); escuchar("revs"); if(isAdmin()){ escuchar("eco"); escuchar("users"); }
     UI.ready=true; render();
   });
